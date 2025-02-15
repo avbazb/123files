@@ -48,7 +48,7 @@
 ## 部署说明
 
 1. 获取123云盘开放平台的访问凭证
-   - 访问[123云盘开放平台](https://www.123pan.com/open-platform)
+   - 访问[123云盘开放平台](https://www.123pan.com/developer)
    - 注册开发者账号
    - 创建应用获取 `CLIENT_ID` 和 `CLIENT_SECRET`
 
