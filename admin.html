@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件收集系统 - 管理控制台</title>
+    <link rel="stylesheet" href="css/admin.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+    .hidden {
+        display: none !important;
+    }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>文件夹</h2>
+        <button class="btn" onclick="showCreateFolderModal()">创建文件夹</button>
+        <div class="folder-list" id="folderList">
+            <!-- 文件夹列表将动态插入到这里 -->
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="toolbar">
+            <div class="search-box">
+                <input type="text" placeholder="搜索文件..." id="searchInput">
+            </div>
+            <div>
+                <button class="btn" onclick="downloadSelected()">批量下载</button>
+                <button class="btn btn-secondary" onclick="deleteSelected()">删除选中</button>
+            </div>
+        </div>
+
+        <div class="file-grid" id="fileGrid">
+            <!-- 文件列表将动态插入到这里 -->
+        </div>
+    </div>
+
+    <!-- 创建文件夹模态框 -->
+    <div class="modal hidden" id="createFolderModal" onclick="hideModal('createFolderModal')">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <h3>创建文件夹</h3>
+            <div class="form-group">
+                <label>文件夹名称</label>
+                <input type="text" id="newFolderName" placeholder="请输入文件夹名称">
+            </div>
+            <div class="form-group">
+                <label>访问密码（可选）</label>
+                <input type="password" id="newFolderPassword" placeholder="不设置则无需密码">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideModal('createFolderModal')">取消</button>
+                <button class="btn" onclick="createFolder()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文件夹设置模态框 -->
+    <div class="modal hidden" id="folderSettingsModal" style="display:none;" onclick="hideModal('folderSettingsModal')">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <h3>文件夹设置</h3>
+            <div class="form-group">
+                <label>文件夹名称</label>
+                <input type="text" id="editFolderName">
+            </div>
+            <div class="form-group">
+                <label>访问密码</label>
+                <input type="password" id="editFolderPassword" placeholder="留空表示不修改密码">
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="removePassword">
+                <label for="removePassword">删除密码（允许公开访问）</label>
+            </div>
+            <div class="form-group">
+                <label>分享链接</label>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="shareLink" readonly style="flex: 1;">
+                    <button class="btn btn-secondary" onclick="copyShareLink()">复制</button>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideModal('folderSettingsModal')">取消</button>
+                <button class="btn" onclick="saveFolderSettings()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script>
+        let currentFolderID = 0;
+        let selectedFiles = new Set();
+
+        // ESC键关闭模态框
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const visibleModal = document.querySelector('.modal:not(.hidden)');
+                if (visibleModal) {
+                    hideModal(visibleModal.id);
+                }
+            }
+        });
+
+        // 显示创建文件夹模态框
+        function showCreateFolderModal() {
+            const modal = document.getElementById('createFolderModal');
+            modal.classList.remove('hidden');
+            modal.style.display = 'flex';
+            document.getElementById('newFolderName').value = '';
+            document.getElementById('newFolderPassword').value = '';
+        }
+
+        // 显示模态框
+        function showModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.remove('hidden');
+                modal.style.display = 'flex';
+            }
+        }
+
+        // 隐藏模态框
+        function hideModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
+        }
+
+        // 初始化
+        async function init() {
+            try {
+                // 隐藏所有模态框
+                document.querySelectorAll('.modal').forEach(modal => {
+                    modal.classList.add('hidden');
+                });
+
+                // 加载文件夹列表
+                await loadFolders();
+                await loadFiles(currentFolderID);
+            } catch (error) {
+                console.error('初始化失败:', error);
+                alert('初始化失败: ' + error.message);
+            }
+        }
+
+        // 加载文件夹列表
+        async function loadFolders() {
+            try {
+                const folderList = document.getElementById('folderList');
+                const folders = await api.getFileList(0);
+                
+                folderList.innerHTML = `
+                    <div class="folder-item ${currentFolderID === 0 ? 'active' : ''}" 
+                         onclick="selectFolder(0)">
+                        <div class="folder-name">根目录</div>
+                    </div>
+                `;
+
+                folders.fileList.forEach(folder => {
+                    if (folder.type === 1) {
+                        folderList.innerHTML += `
+                            <div class="folder-item ${folder.fileId === currentFolderID ? 'active' : ''}"
+                                 onclick="selectFolder(${folder.fileId})">
+                                <div class="folder-name">${folder.filename}</div>
+                                <div class="folder-actions">
+                                    <button class="action-btn" onclick="showFolderSettings(${folder.fileId})">
+                                        ⚙️
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }
+                });
+            } catch (error) {
+                console.error('加载文件夹失败:', error);
+                alert('加载文件夹失败: ' + error.message);
+            }
+        }
+
+        // 加载文件列表
+        async function loadFiles(folderID) {
+            try {
+                const fileGrid = document.getElementById('fileGrid');
+                const files = await api.getFileList(folderID);
+                
+                fileGrid.innerHTML = '';
+                selectedFiles.clear();
+
+                files.fileList.forEach(file => {
+                    if (file.type === 0) {
+                        fileGrid.innerHTML += `
+                            <div class="file-card" data-file-id="${file.fileId}">
+                                <div class="file-actions">
+                                    <input type="checkbox" onchange="toggleFileSelection(${file.fileId})">
+                                </div>
+                                <div class="file-icon">${getFileIcon(file.filename)}</div>
+                                <div class="file-name">${file.filename}</div>
+                                <div class="file-size">${formatFileSize(file.size)}</div>
+                                <button class="btn" onclick="downloadFile(${file.fileId})">下载</button>
+                            </div>
+                        `;
+                    }
+                });
+            } catch (error) {
+                console.error('加载文件失败:', error);
+                alert('加载文件失败: ' + error.message);
+            }
+        }
+
+        // 选择文件夹
+        async function selectFolder(folderID) {
+            currentFolderID = folderID;
+            document.querySelectorAll('.folder-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelector(`.folder-item[onclick*="${folderID}"]`).classList.add('active');
+            await loadFiles(folderID);
+        }
+
+        // 显示文件夹设置
+        async function showFolderSettings(folderID) {
+            try {
+                const folders = await api.getFileList(0);
+                const folder = folders.fileList.find(f => f.fileId === folderID);
+                if (folder) {
+                    const modal = document.getElementById('folderSettingsModal');
+                    modal.dataset.folderId = folderID;
+                    modal.querySelector('#editFolderName').value = folder.filename;
+                    
+                    // 生成分享链接
+                    const shareUrl = `${window.location.origin}/index.html?folder=${folderID}`;
+                    modal.querySelector('#shareLink').value = shareUrl;
+                    
+                    // 获取文件夹密码
+                    const password = await api.getFolderPassword(folderID);
+                    modal.querySelector('#removePassword').checked = !password;
+                    modal.querySelector('#editFolderPassword').value = '';
+                    modal.querySelector('#editFolderPassword').placeholder = password ? '******' : '不设置则无需密码';
+                    
+                    showModal('folderSettingsModal');
+                }
+            } catch (error) {
+                console.error('获取文件夹信息失败:', error);
+                alert('获取文件夹信息失败: ' + error.message);
+            }
+        }
+
+        // 创建文件夹
+        async function createFolder() {
+            const name = document.getElementById('newFolderName').value;
+            const password = document.getElementById('newFolderPassword').value;
+
+            if (!name) {
+                alert('请输入文件夹名称');
+                return;
+            }
+
+            try {
+                // 创建文件夹
+                const result = await api.createFolder(name, currentFolderID);
+                
+                // 如果设置了密码，则设置文件夹密码
+                if (password) {
+                    await api.setFolderPassword(result.dirID, password);
+                }
+                
+                // 隐藏模态框并刷新文件夹列表
+                hideModal('createFolderModal');
+                await loadFolders();
+                
+                // 如果在当前文件夹中创建，则刷新文件列表
+                if (currentFolderID === result.parentID) {
+                    await loadFiles(currentFolderID);
+                }
+            } catch (error) {
+                if (error.message.includes('已经存在')) {
+                    alert('创建失败：该文件夹名称已存在，请使用其他名称');
+                } else {
+                    console.error('创建文件夹失败:', error);
+                    alert('创建文件夹失败: ' + error.message);
+                }
+            }
+        }
+
+        // 保存文件夹设置
+        async function saveFolderSettings() {
+            const modal = document.getElementById('folderSettingsModal');
+            const folderID = parseInt(modal.dataset.folderId);
+            const newName = document.getElementById('editFolderName').value;
+            const newPassword = document.getElementById('editFolderPassword').value;
+            const removePassword = document.getElementById('removePassword').checked;
+
+            try {
+                // 获取当前文件夹信息
+                const folders = await api.getFileList(0);
+                const folder = folders.fileList.find(f => f.fileId === folderID);
+
+                if (folder) {
+                    // 更新文件夹名称
+                    if (newName !== folder.filename) {
+                        await api.request(`${CONFIG.API_BASE_URL}/api/v1/file/rename`, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                renameList: [`${folderID}|${newName}`]
+                            })
+                        });
+                    }
+
+                    // 更新密码
+                    if (removePassword) {
+                        await api.setFolderPassword(folderID, null);
+                    } else if (newPassword) {
+                        await api.setFolderPassword(folderID, newPassword);
+                    }
+
+                    hideModal('folderSettingsModal');
+                    await loadFolders();
+                }
+            } catch (error) {
+                console.error('保存文件夹设置失败:', error);
+                alert('保存文件夹设置失败: ' + error.message);
+            }
+        }
+
+        // 复制分享链接
+        function copyShareLink() {
+            const shareLink = document.getElementById('shareLink');
+            shareLink.select();
+            document.execCommand('copy');
+            alert('链接已复制到剪贴板');
+        }
+
+        // 切换文件选择
+        function toggleFileSelection(fileID) {
+            if (selectedFiles.has(fileID)) {
+                selectedFiles.delete(fileID);
+            } else {
+                selectedFiles.add(fileID);
+            }
+        }
+
+        // 批量下载选中文件
+        async function downloadSelected() {
+            if (selectedFiles.size === 0) {
+                alert('请选择要下载的文件');
+                return;
+            }
+
+            try {
+                for (const fileID of selectedFiles) {
+                    await downloadFile(fileID);
+                }
+            } catch (error) {
+                console.error('批量下载失败:', error);
+                alert('批量下载失败: ' + error.message);
+            }
+        }
+
+        // 下载单个文件
+        async function downloadFile(fileID) {
+            try {
+                const result = await api.getDirectLink(fileID);
+                if (result && result.url) {
+                    const a = document.createElement('a');
+                    a.href = result.url;
+                    a.target = '_blank';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                } else {
+                    throw new Error('获取下载链接失败');
+                }
+            } catch (error) {
+                console.error('下载失败:', error);
+                alert('下载失败: ' + error.message);
+            }
+        }
+
+        // 删除选中文件
+        async function deleteSelected() {
+            if (selectedFiles.size === 0) {
+                alert('请选择要删除的文件');
+                return;
+            }
+
+            if (!confirm(`确定要删除选中的 ${selectedFiles.size} 个文件吗？`)) {
+                return;
+            }
+
+            try {
+                await api.request(`${CONFIG.API_BASE_URL}/api/v1/file/trash`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        fileIDs: Array.from(selectedFiles)
+                    })
+                });
+
+                await loadFiles(currentFolderID);
+            } catch (error) {
+                console.error('删除文件失败:', error);
+                alert('删除文件失败: ' + error.message);
+            }
+        }
+
+        // 获取文件图标
+        function getFileIcon(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const icons = {
+                pdf: '📄',
+                doc: '📝', docx: '📝',
+                xls: '📊', xlsx: '📊',
+                ppt: '📽', pptx: '📽',
+                jpg: '🖼', jpeg: '🖼', png: '🖼', gif: '🖼',
+                zip: '📦', rar: '📦', '7z': '📦',
+                mp3: '🎵', wav: '🎵',
+                mp4: '🎥', avi: '🎥', mov: '🎥'
+            };
+            return icons[ext] || '📄';
+        }
+
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let size = bytes;
+            let unitIndex = 0;
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex++;
+            }
+            return `${size.toFixed(2)} ${units[unitIndex]}`;
+        }
+
+        // 搜索文件
+        document.getElementById('searchInput').addEventListener('input', async (e) => {
+            const keyword = e.target.value.trim();
+            if (keyword) {
+                try {
+                    const result = await api.request(
+                        `${CONFIG.API_BASE_URL}/api/v2/file/list?parentFileId=${currentFolderID}&searchData=${encodeURIComponent(keyword)}`
+                    );
+                    updateFileGrid(result.fileList);
+                } catch (error) {
+                    console.error('搜索文件失败:', error);
+                }
+            } else {
+                await loadFiles(currentFolderID);
+            }
+        });
+
+        // 更新文件网格
+        function updateFileGrid(files) {
+            const fileGrid = document.getElementById('fileGrid');
+            fileGrid.innerHTML = '';
+            selectedFiles.clear();
+
+            files.forEach(file => {
+                if (file.type === 0) {
+                    fileGrid.innerHTML += `
+                        <div class="file-card" data-file-id="${file.fileId}">
+                            <div class="file-actions">
+                                <input type="checkbox" onchange="toggleFileSelection(${file.fileId})">
+                            </div>
+                            <div class="file-icon">${getFileIcon(file.filename)}</div>
+                            <div class="file-name">${file.filename}</div>
+                            <div class="file-size">${formatFileSize(file.size)}</div>
+                            <button class="btn" onclick="downloadFile(${file.fileId})">下载</button>
+                        </div>
+                    `;
+                }
+            });
+        }
+
+        // 初始化页面
+        init();
+    </script>
+</body>
+</html> 

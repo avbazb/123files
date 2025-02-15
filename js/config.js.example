@@ -1,0 +1,11 @@
+const CONFIG = {
+    // 123云盘开放平台API地址
+    API_BASE_URL: 'YOUR_API_BASE_URL', // 例如: https://open-api.123pan.com
+
+    // 在123云盘开放平台获取的应用凭证
+    CLIENT_ID: 'YOUR_CLIENT_ID',
+    CLIENT_SECRET: 'YOUR_CLIENT_SECRET',
+
+    // 文件分片大小：10MB，可根据需要调整
+    SLICE_SIZE: 10 * 1024 * 1024,
+}; 

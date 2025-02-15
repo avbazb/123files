@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件收集系统</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        .folder-info {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .folder-info h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .folder-info p {
+            margin: 0.5rem 0 0;
+            color: #666;
+        }
+        .upload-tip {
+            color: #666;
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+        }
+        .file-item {
+            position: relative;
+            padding-right: 100px;
+        }
+        .file-status {
+            position: absolute;
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+        .cancel-btn {
+            background: var(--error-color);
+            color: white;
+            border: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            margin-left: 0.5rem;
+        }
+        .file-icon {
+            width: 24px;
+            height: 24px;
+            margin-right: 0.5rem;
+        }
+        .file-info {
+            display: flex;
+            align-items: center;
+        }
+        .pending-file-list {
+            margin-top: 1rem;
+            text-align: left;
+        }
+        .pending-file-item {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 4px;
+            margin-bottom: 0.5rem;
+        }
+        .pending-file-item .file-name {
+            flex: 1;
+            margin-right: 1rem;
+        }
+        .pending-file-item .remove-btn {
+            background: var(--error-color);
+            color: white;
+            border: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="folder-info">
+            <h1 id="folderName">文件夹列表</h1>
+            <p id="folderDesc">请选择要访问的文件夹</p>
+        </div>
+
+        <div class="folder-list" id="folderList">
+            <!-- 文件夹列表将动态插入到这里 -->
+        </div>
+
+        <div class="upload-area hidden" id="uploadArea">
+            <h2>文件上传</h2>
+            <p>点击或拖拽文件到此处上传</p>
+            <input type="file" id="fileInput" multiple style="display: none">
+            <button class="btn" onclick="document.getElementById('fileInput').click()">选择文件</button>
+            <p class="upload-tip">选择的文件将显示在下方列表中，点击"开始上传"按钮开始上传</p>
+            
+            <div id="pendingFileList" class="pending-file-list" style="margin-top: 1rem;">
+                <!-- 待上传文件列表 -->
+            </div>
+            
+            <div class="upload-actions" style="margin-top: 1rem; text-align: center;">
+                <button class="btn" id="startUploadBtn" onclick="startUpload()" style="display: none;">开始上传</button>
+            </div>
+        </div>
+
+        <div class="file-list hidden" id="fileList">
+            <!-- 已上传文件列表 -->
+        </div>
+    </div>
+
+    <div class="modal hidden" id="passwordModal">
+        <div class="modal-content">
+            <h3>请输入文件夹密码</h3>
+            <p id="passwordDesc" style="color: #666; margin-bottom: 1rem;"></p>
+            <div class="form-group">
+                <input type="password" id="folderPassword" placeholder="请输入密码" autofocus>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideModal('passwordModal')">取消</button>
+                <button class="btn" onclick="submitPassword()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/upload.js"></script>
+    <script>
+        // 获取DOM元素
+        const container = document.querySelector('.container');
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const folderList = document.getElementById('folderList');
+        const passwordModal = document.getElementById('passwordModal');
+        const folderPassword = document.getElementById('folderPassword');
+        
+        let currentFolderID = 0;
+        let pendingFiles = [];
+
+        // 初始化
+        async function init() {
+            try {
+                // 隐藏所有模态框
+                document.querySelectorAll('.modal').forEach(modal => {
+                    modal.classList.add('hidden');
+                });
+
+                // 获取URL参数中的文件夹ID
+                const urlParams = new URLSearchParams(window.location.search);
+                const folderID = urlParams.get('folder');
+
+                if (folderID) {
+                    // 如果URL中有文件夹ID，尝试进入该文件夹
+                    await enterFolder(parseInt(folderID));
+                } else {
+                    // 否则显示文件夹列表
+                    await loadFolderList();
+                }
+            } catch (error) {
+                console.error('初始化失败:', error);
+                alert('初始化失败: ' + error.message);
+            }
+        }
+
+        // 加载文件夹列表
+        async function loadFolderList() {
+            try {
+                const folders = await api.getFileList(0);
+                folderList.innerHTML = '';
+
+                folders.fileList.forEach(folder => {
+                    if (folder.type === 1) {
+                        const folderItem = document.createElement('div');
+                        folderItem.className = 'folder-item';
+                        folderItem.style.cursor = 'pointer';
+                        folderItem.style.padding = '1rem';
+                        folderItem.style.borderRadius = '8px';
+                        folderItem.style.marginBottom = '0.5rem';
+                        folderItem.style.background = 'white';
+                        folderItem.style.display = 'flex';
+                        folderItem.style.alignItems = 'center';
+                        folderItem.innerHTML = `
+                            <span style="margin-right: 0.5rem">📁</span>
+                            <div style="flex: 1">${folder.filename}</div>
+                            <button class="btn" onclick="enterFolder(${folder.fileId})">进入</button>
+                        `;
+                        folderList.appendChild(folderItem);
+                    }
+                });
+
+                // 显示文件夹列表，隐藏上传区域
+                folderList.classList.remove('hidden');
+                uploadArea.classList.add('hidden');
+                fileList.classList.add('hidden');
+            } catch (error) {
+                console.error('加载文件夹列表失败:', error);
+                alert('加载文件夹列表失败: ' + error.message);
+            }
+        }
+
+        // 进入文件夹
+        async function enterFolder(folderID) {
+            try {
+                // 检查文件夹是否需要密码
+                const password = await api.getFolderPassword(folderID);
+                if (password) {
+                    currentFolderID = folderID;
+                    const folders = await api.getFileList(0);
+                    const folder = folders.fileList.find(f => f.fileId === folderID);
+                    document.getElementById('passwordDesc').textContent = 
+                        `文件夹"${folder.filename}"受密码保护，请输入密码继续访问`;
+                    passwordModal.classList.remove('hidden');
+                    return;
+                }
+
+                // 不需要密码，直接进入
+                await showUploadArea(folderID);
+            } catch (error) {
+                console.error('进入文件夹失败:', error);
+                alert('进入文件夹失败: ' + error.message);
+            }
+        }
+
+        // 显示上传区域
+        async function showUploadArea(folderID) {
+            try {
+                currentFolderID = folderID;
+                const folders = await api.getFileList(0);
+                const folder = folders.fileList.find(f => f.fileId === folderID);
+
+                if (folder) {
+                    document.getElementById('folderName').textContent = folder.filename;
+                    document.getElementById('folderDesc').textContent = 
+                        '请将文件拖放到下方区域或点击"选择文件"按钮进行上传';
+                    
+                    // 显示上传区域，隐藏文件夹列表
+                    folderList.classList.add('hidden');
+                    uploadArea.classList.remove('hidden');
+                    fileList.classList.remove('hidden');
+
+                    // 加载当前文件夹中的文件
+                    await loadCurrentFolderFiles(folderID);
+                }
+            } catch (error) {
+                console.error('显示上传区域失败:', error);
+                alert('显示上传区域失败: ' + error.message);
+            }
+        }
+
+        // 加载当前文件夹中的文件
+        async function loadCurrentFolderFiles(folderID) {
+            try {
+                const files = await api.getFileList(folderID);
+                const fileListDiv = document.getElementById('fileList');
+                fileListDiv.innerHTML = '<h3>文件夹内容：</h3>';
+
+                if (files.fileList && files.fileList.length > 0) {
+                    const fileItems = files.fileList
+                        .filter(file => file.type === 0)  // 只显示文件，不显示文件夹
+                        .map(file => `
+                            <div class="file-item" style="display: flex; align-items: center; padding: 10px; background: white; margin: 5px 0; border-radius: 8px;">
+                                <span class="file-icon" style="margin-right: 10px;">${getFileIcon(file.filename)}</span>
+                                <div class="file-info" style="flex: 1;">
+                                    <div class="file-name">${file.filename}</div>
+                                    <div style="color: #666; font-size: 0.9em;">${formatFileSize(file.size)}</div>
+                                </div>
+                            </div>
+                        `).join('');
+
+                    fileListDiv.innerHTML += fileItems;
+                } else {
+                    fileListDiv.innerHTML += '<p style="color: #666; text-align: center; padding: 20px;">文件夹为空</p>';
+                }
+            } catch (error) {
+                console.error('加载文件列表失败:', error);
+                alert('加载文件列表失败: ' + error.message);
+            }
+        }
+
+        // 处理密码验证
+        async function submitPassword() {
+            const password = folderPassword.value;
+            const correctPassword = await api.getFolderPassword(currentFolderID);
+            
+            if (password === correctPassword) {
+                hideModal('passwordModal');
+                await showUploadArea(currentFolderID);
+                
+                // 处理等待上传的文件
+                if (pendingFiles.length > 0) {
+                    handleFiles(pendingFiles);
+                    pendingFiles = [];
+                }
+            } else {
+                alert('密码错误，请重试');
+            }
+        }
+
+        // 隐藏模态框
+        function hideModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.add('hidden');
+                // 清空输入
+                const inputs = modal.querySelectorAll('input');
+                inputs.forEach(input => input.value = '');
+            }
+        }
+
+        // 文件拖放处理
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-over');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            addToPendingList(e.dataTransfer.files);
+        });
+
+        // 文件选择处理
+        fileInput.addEventListener('change', () => {
+            addToPendingList(fileInput.files);
+            fileInput.value = '';
+        });
+
+        // 处理文件上传
+        async function handleFiles(files) {
+            const fileListDiv = document.getElementById('fileList');
+            for (const file of files) {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.dataset.filename = file.name; // 添加文件名标识
+                fileItem.innerHTML = `
+                    <div class="file-info">
+                        <span class="file-icon">${getFileIcon(file.name)}</span>
+                        <div class="file-name">${file.name}</div>
+                        <div style="margin-left: 1rem; color: #666;">${formatFileSize(file.size)}</div>
+                    </div>
+                    <div class="file-progress">
+                        <div class="progress-bar" style="width: 0%"></div>
+                    </div>
+                    <div class="file-status">
+                        <span class="status-text">准备上传</span>
+                        <button class="cancel-btn" onclick="cancelUpload('${file.name}')">取消</button>
+                    </div>
+                `;
+                fileListDiv.appendChild(fileItem);
+
+                try {
+                    const fileID = await uploadManager.addUpload(file, currentFolderID);
+                    const successItem = document.querySelector(`.file-item[data-filename="${file.name}"]`);
+                    if (successItem) {
+                        successItem.querySelector('.file-status').innerHTML = `
+                            <span class="success">上传成功</span>
+                        `;
+                    }
+                } catch (error) {
+                    if (!uploadManager.uploads.get(file.name)?.aborted) {
+                        const errorItem = document.querySelector(`.file-item[data-filename="${file.name}"]`);
+                        if (errorItem) {
+                            errorItem.querySelector('.file-status').innerHTML = `
+                                <span class="error">上传失败: ${error.message}</span>
+                                <button class="btn" onclick="retryUpload(this, '${file.name}')">重试</button>
+                            `;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 取消上传
+        function cancelUpload(filename) {
+            uploadManager.cancelUpload(filename);
+        }
+
+        // 重试上传
+        async function retryUpload(btn, filename) {
+            const fileItem = btn.closest('.file-item');
+            const file = Array.from(pendingFiles).find(f => f.name === filename) || 
+                        Array.from(fileInput.files).find(f => f.name === filename);
+            
+            if (file) {
+                fileItem.querySelector('.file-status').innerHTML = `
+                    准备上传
+                    <button class="cancel-btn" onclick="cancelUpload('${filename}')">取消</button>
+                `;
+                fileItem.querySelector('.progress-bar').style.width = '0%';
+                await handleFiles([file]);
+            } else {
+                alert('找不到原始文件，请重新选择文件上传');
+            }
+        }
+
+        // 获取文件图标
+        function getFileIcon(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const icons = {
+                pdf: '📄',
+                doc: '📝', docx: '📝',
+                xls: '📊', xlsx: '📊',
+                ppt: '📽', pptx: '📽',
+                jpg: '🖼', jpeg: '🖼', png: '🖼', gif: '🖼',
+                zip: '📦', rar: '📦', '7z': '📦',
+                mp3: '🎵', wav: '🎵',
+                mp4: '🎥', avi: '🎥', mov: '🎥'
+            };
+            return icons[ext] || '📄';
+        }
+
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let size = bytes;
+            let unitIndex = 0;
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex++;
+            }
+            return `${size.toFixed(2)} ${units[unitIndex]}`;
+        }
+
+        // 上传进度更新
+        window.addEventListener('uploadProgress', (e) => {
+            const { filename, progress, status, uploadedSize, totalSize, speed } = e.detail;
+            const fileItem = document.querySelector(`.file-item[data-filename="${filename}"]`);
+            if (fileItem) {
+                fileItem.querySelector('.progress-bar').style.width = `${progress}%`;
+                
+                // 格式化上传信息
+                let statusText = status;
+                if (uploadedSize !== undefined && totalSize !== undefined) {
+                    const uploadedSizeStr = formatFileSize(uploadedSize);
+                    const totalSizeStr = formatFileSize(totalSize);
+                    statusText += ` (${uploadedSizeStr}/${totalSizeStr})`;
+                    
+                    // 添加速度信息
+                    if (speed > 0) {
+                        const speedStr = formatFileSize(speed) + '/s';
+                        statusText += ` - ${speedStr}`;
+                    }
+                }
+                
+                fileItem.querySelector('.status-text').textContent = statusText;
+            }
+        });
+
+        // 上传取消事件
+        window.addEventListener('uploadCancelled', (e) => {
+            const { filename } = e.detail;
+            const fileItem = document.querySelector(`.file-item[data-filename="${filename}"]`);
+            if (fileItem) {
+                fileItem.querySelector('.file-status').innerHTML = `
+                    <span class="error">已取消上传</span>
+                    <button class="btn" onclick="retryUpload(this, '${filename}')">重试</button>
+                `;
+            }
+        });
+
+        // 添加到待上传列表
+        function addToPendingList(files) {
+            const pendingList = document.getElementById('pendingFileList');
+            const startUploadBtn = document.getElementById('startUploadBtn');
+            
+            Array.from(files).forEach(file => {
+                // 检查文件是否已在列表中
+                if (!pendingFiles.some(f => f.name === file.name)) {
+                    pendingFiles.push(file);
+                    
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'pending-file-item';
+                    fileItem.innerHTML = `
+                        <span class="file-icon">${getFileIcon(file.name)}</span>
+                        <div class="file-name">${file.name}</div>
+                        <div style="color: #666;">${formatFileSize(file.size)}</div>
+                        <button class="remove-btn" onclick="removeFromPendingList('${file.name}')">移除</button>
+                    `;
+                    pendingList.appendChild(fileItem);
+                }
+            });
+
+            // 显示或隐藏上传按钮
+            startUploadBtn.style.display = pendingFiles.length > 0 ? 'inline-block' : 'none';
+        }
+
+        // 从待上传列表移除
+        function removeFromPendingList(filename) {
+            pendingFiles = pendingFiles.filter(file => file.name !== filename);
+            const pendingList = document.getElementById('pendingFileList');
+            const fileItem = Array.from(pendingList.children).find(
+                item => item.querySelector('.file-name').textContent === filename
+            );
+            if (fileItem) {
+                pendingList.removeChild(fileItem);
+            }
+
+            // 更新上传按钮显示状态
+            document.getElementById('startUploadBtn').style.display = 
+                pendingFiles.length > 0 ? 'inline-block' : 'none';
+        }
+
+        // 开始上传
+        async function startUpload() {
+            const startUploadBtn = document.getElementById('startUploadBtn');
+            startUploadBtn.disabled = true;
+            
+            try {
+                for (const file of pendingFiles) {
+                    await handleFiles([file]);
+                }
+                // 清空待上传列表
+                pendingFiles = [];
+                document.getElementById('pendingFileList').innerHTML = '';
+                startUploadBtn.style.display = 'none';
+            } catch (error) {
+                console.error('上传失败:', error);
+            } finally {
+                startUploadBtn.disabled = false;
+            }
+        }
+
+        // 初始化页面
+        init();
+    </script>
+</body>
+</html> 
